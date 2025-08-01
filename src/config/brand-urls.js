@@ -1,7 +1,7 @@
 // Brand directory URL mappings
 export const BRAND_DIRECTORY_URLS = {
   ritzcarlton: "https://www.ritzcarlton.com/en/hotels-and-resorts/",
-  stregis: "https://st-regis.marriott.com/hotels/",
+  stregis: "https://st-regis.marriott.com/hotel-directory/",
   marriottMain: "https://marriott-hotels.marriott.com/locations/",
   sheraton: "https://www.sheraton.com/hotels/",
   westin: "https://www.westin.com/hotels/",
