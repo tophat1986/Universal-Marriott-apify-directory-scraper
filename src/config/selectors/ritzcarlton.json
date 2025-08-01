@@ -1,10 +1,10 @@
 {
   "name": "Ritz-Carlton Strategy",
-  "waitForSelector": ".hotels-list, .properties-list, body",
+  "waitForSelector": ".tabbed-hotel-map-component-regions--region-list-ul, .hotels-list, .properties-list, body",
   "selectors": {
-    "hotelLinks": "a[href*='/hotels/'], .hotel-link, .property-link",
-    "hotelName": ".hotel-name, .property-name, h2, h3",
-    "hotelUrl": "a[href*='/hotels/']",
+    "hotelLinks": ".tabbed-hotel-map-component-regions--region-list-ul li.hotelUrl a, a[href*='/hotels/'], .hotel-link, .property-link",
+    "hotelName": ".tabbed-hotel-map-component-regions--region-list-ul li.hotelUrl a span, .hotel-name, .property-name, h2, h3",
+    "hotelUrl": ".tabbed-hotel-map-component-regions--region-list-ul li.hotelUrl a, a[href*='/hotels/']",
     "location": ".location, .address, .city",
     "city": ".city, .location",
     "country": ".country, .location",

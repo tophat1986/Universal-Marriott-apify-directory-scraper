@@ -14,7 +14,7 @@ export class BaseStrategy {
     }
     
     if (!selectors.selectors || !selectors.selectors.hotelLinks) {
-      throw new Error(`Invalid selectors configuration: missing required 'selectors.hotelLinks' field. Got: ${JSON.stringify(selectors)}`);
+      throw new Error(`Invalid selectors configuration: missing required 'selectors.selectors.hotelLinks' field. Got: ${JSON.stringify(selectors)}`);
     }
     
     this.selectors = selectors;

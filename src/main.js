@@ -428,7 +428,20 @@ const crawler = new PuppeteerCrawler({
       };
       
       // Execute strategy to scrape hotels
-      const scrapedHotels = await strategy.scrape(page, context);
+      let scrapedHotels = [];
+      try {
+        scrapedHotels = await strategy.scrape(page, context);
+      } catch (strategyError) {
+        log.error(`❌ [${requestId}] Strategy execution failed: ${strategyError.message}`);
+        
+        // Add strategy error to results
+        const strategyErrorObj = handleExtractionError(request.url, strategyError);
+        results.errors.push(strategyErrorObj);
+        await dataset.pushData({ type: 'error', ...strategyErrorObj });
+        
+        // Return empty array to continue processing
+        scrapedHotels = [];
+      }
       
       // Process and validate each hotel
       for (const hotel of scrapedHotels) {

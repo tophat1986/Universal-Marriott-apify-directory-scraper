@@ -30,4 +30,6 @@
 - Clearer error insights with actionable feedback
 - Consolidated output instead of per-asset noise
 - Early validation of selectors to prevent undefined errors
-- Enhanced challenge page detection with residential proxy recommendations 
+- Enhanced challenge page detection with residential proxy recommendations
+- Proper error capture for strategy failures
+- JS-rendered content handling with timeouts 
