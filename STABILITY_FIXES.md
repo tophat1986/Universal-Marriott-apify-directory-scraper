@@ -3,12 +3,12 @@
 ## Issues Addressed
 
 ### 1. Fatal Logging API Mismatch ✅ FIXED
-**Problem**: `TypeError: log.warn is not a function` - The code assumed `log.warn` exists, but Apify's logger exposes `log.warning`.
+**Problem**: `TypeError: log.warn is not a function` - The code assumed `log.warn` exists, but Apify's logger exposes `log.warning`. Additionally, `console.warning` doesn't exist in Node.js (should be `console.warn`).
 
 **Solution**:
-- Replaced all `log.warn()` calls with `log.warning()` throughout the codebase
+- Replaced all `log.warn()` calls with `log.warning()` throughout the codebase (Apify logger method)
 - Added logger health check at the beginning of request handler
-- Implemented fallback mechanism: `log.warning = console.warning || console.warn || (() => {})`
+- Implemented fallback mechanism: `log.warning = console.warn || (() => {})` (Node.js console method)
 
 **Files Modified**:
 - `src/main.js`: Lines 164, 173, 185, 225, 246, 293

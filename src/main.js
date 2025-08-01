@@ -73,7 +73,7 @@ try {
     
     // Validate proxy configuration
     if (proxyConfiguration && !proxyConfiguration.newUrlFunction) {
-        console.warning('⚠️ Proxy configuration created but no proxy groups available');
+        console.warn('⚠️ Proxy configuration created but no proxy groups available');
         proxyConfiguration = null;
         proxyType = 'none';
     }
@@ -82,7 +82,7 @@ try {
     usingProxy = proxyConfiguration !== null;
     
 } catch (error) {
-    console.warning('⚠️ Failed to create proxy configuration:', error.message);
+    console.warn('⚠️ Failed to create proxy configuration:', error.message);
     console.log('🌐 Proceeding without proxies');
     proxyConfiguration = null;
     proxyType = 'none';
@@ -245,8 +245,8 @@ const crawler = new PuppeteerCrawler({
       // Health check: verify logger methods exist
       if (typeof log.warning !== 'function') {
         log.error(`🚨 [${requestId}] Logger health check failed: log.warning not available`);
-        // Fallback to console.warning if needed
-        log.warning = console.warning || console.warn || (() => {});
+        // Fallback to console.warn if needed
+        log.warning = console.warn || (() => {});
       }
       
       // Set stealth configuration
