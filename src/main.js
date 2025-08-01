@@ -81,13 +81,18 @@ try {
     // Set the actual proxy state
     usingProxy = proxyConfiguration !== null;
     
-} catch (error) {
-    console.warn('⚠️ Failed to create proxy configuration:', error.message);
-    console.log('🌐 Proceeding without proxies');
-    proxyConfiguration = null;
-    proxyType = 'none';
-    usingProxy = false;
-}
+    } catch (error) {
+        console.warn('⚠️ Failed to create proxy configuration:', error.message);
+        console.log('🌐 Proceeding without proxies');
+        proxyConfiguration = null;
+        proxyType = 'none';
+        usingProxy = false;
+        
+        // If residential proxy is required but not available, warn about potential blocks
+        if (input.proxyType === 'residential') {
+            console.warn('🚨 WARNING: Residential proxy requested but not available. Challenge pages may block scraping.');
+        }
+    }
 
 // Create dataset for results
 const dataset = await Actor.openDataset();
@@ -349,6 +354,7 @@ const crawler = new PuppeteerCrawler({
           // Fail fast on challenge detection to avoid wasting time on assets
           const challengeError = new Error('Challenge page detected - use residential proxy');
           challengeError.isChallengePage = true;
+          challengeError.shouldRetryWithResidentialProxy = true;
           throw challengeError;
         }
       } catch (challengeError) {
@@ -564,6 +570,12 @@ const crawler = new PuppeteerCrawler({
     // Fast-fail logic: prevent retry on 404
     if (error.message.includes('HTTP 404')) {
       request.noRetry = true;
+    }
+    
+    // Handle challenge page errors - suggest residential proxy retry
+    if (error.message.includes('Challenge page detected') || error.shouldRetryWithResidentialProxy) {
+      log.warning(`🚨 Challenge page detected - recommend retry with residential proxy`);
+      // Don't set noRetry here - let it retry with different proxy if available
     }
 
     // Enhanced error object for failed requests

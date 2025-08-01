@@ -28,4 +28,6 @@
 - 80-90% reduction in false positive classifications
 - Faster challenge detection (2-3 seconds vs full page load)
 - Clearer error insights with actionable feedback
-- Consolidated output instead of per-asset noise 
+- Consolidated output instead of per-asset noise
+- Early validation of selectors to prevent undefined errors
+- Enhanced challenge page detection with residential proxy recommendations 

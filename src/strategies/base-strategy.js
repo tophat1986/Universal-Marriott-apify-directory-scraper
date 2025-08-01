@@ -8,6 +8,15 @@ import { getBrandInfo, getSubBrandInfo } from '../config/index.js';
 
 export class BaseStrategy {
   constructor(selectors, brandInfo = {}) {
+    // Validate selectors configuration
+    if (!selectors || typeof selectors !== 'object') {
+      throw new Error(`Invalid selectors configuration: expected object, got ${typeof selectors}`);
+    }
+    
+    if (!selectors.selectors || !selectors.selectors.hotelLinks) {
+      throw new Error(`Invalid selectors configuration: missing required 'selectors.hotelLinks' field. Got: ${JSON.stringify(selectors)}`);
+    }
+    
     this.selectors = selectors;
     this.brandInfo = {
       name: brandInfo.name || 'Unknown Brand',

@@ -16,6 +16,11 @@ export class RitzCarltonStrategy extends BaseStrategy {
     const hotels = [];
     
     try {
+      // Validate selectors before use
+      if (!this.selectors || !this.selectors.hotelLinks) {
+        throw new Error(`Invalid selectors configuration: hotelLinks selector is missing. Got: ${JSON.stringify(this.selectors)}`);
+      }
+
       // Wait for the page to load
       await this.waitForPageLoad(page, 30000);
 
