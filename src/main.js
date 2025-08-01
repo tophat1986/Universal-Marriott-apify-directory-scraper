@@ -5,6 +5,7 @@ import { PuppeteerCrawler } from 'crawlee';
 
 // Import our universal scraper components
 import { detectBrandFromUrl, validateUrlForBrand, getCrawlerConfig, PUPPETEER_LAUNCH_OPTIONS } from './config/index.js';
+import { getBrandDirectoryUrl, getBrandKeyFromSelection } from './config/brand-urls.js';
 import { createStrategy } from './strategies/factory.js';
 import { cleanAndValidateHotelData, removeDuplicateHotels, sortHotelsByMarsha } from './utils/data-cleaner.js';
 import { handleDeadHotel, handleExtractionError, aggregateErrors } from './utils/error-handler.js';
@@ -16,20 +17,31 @@ await Actor.init();
 const input = await Actor.getInput();
 
 // Validate required input
-if (!input.targetUrl) {
-  throw new Error('targetUrl is required in input');
+if (!input.brandSelection) {
+  throw new Error('brandSelection is required in input');
 }
 
-// Detect or validate brand
-const brandKey = input.brandKey ? 
-  validateUrlForBrand(input.targetUrl, input.brandKey) : 
-  detectBrandFromUrl(input.targetUrl);
+// Determine the target URL
+let targetUrl;
+let brandKey;
 
-if (!brandKey) {
-  throw new Error(`Unsupported domain: ${input.targetUrl}. Please provide a valid Marriott brand URL.`);
+if (input.targetUrl) {
+  // If manual URL is provided, use it and detect brand
+  targetUrl = input.targetUrl;
+  brandKey = input.brandKey ? 
+    validateUrlForBrand(input.targetUrl, input.brandKey) : 
+    detectBrandFromUrl(input.targetUrl);
+    
+  if (!brandKey) {
+    throw new Error(`Unsupported domain: ${input.targetUrl}. Please provide a valid Marriott brand URL.`);
+  }
+} else {
+  // Use the brand selection to get the directory URL
+  targetUrl = getBrandDirectoryUrl(input.brandSelection);
+  brandKey = getBrandKeyFromSelection(input.brandSelection);
 }
 
-console.log(`🎯 Detected brand: ${brandKey} for URL: ${input.targetUrl}`);
+console.log(`🎯 Using brand: ${brandKey} for URL: ${targetUrl}`);
 
 // Get crawler configuration
 const crawlerConfig = getCrawlerConfig(input);
@@ -46,7 +58,7 @@ const results = {
   errors: [],
   metadata: {
     total_hotels: 0,
-    source_url: input.targetUrl,
+    source_url: targetUrl,
     scraped_at: new Date().toISOString(),
     execution_time_ms: 0,
     brand_key: brandKey,
@@ -163,7 +175,7 @@ const crawler = new PuppeteerCrawler({
 });
 
 // Run the crawler with the target URL
-await crawler.run([{ url: input.targetUrl }]);
+await crawler.run([{ url: targetUrl }]);
 
 // Push final results to dataset
 await dataset.pushData({

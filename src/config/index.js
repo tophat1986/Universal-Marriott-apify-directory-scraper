@@ -1,6 +1,7 @@
 // Main configuration export
 export { DOMAIN_PATTERNS, detectBrandFromUrl, validateUrlForBrand } from './domains.js';
 export { RATE_PROFILES, DEFAULT_CRAWLER_CONFIG, getCrawlerConfig, PUPPETEER_LAUNCH_OPTIONS } from './crawler.js';
+export { BRAND_DIRECTORY_URLS, getBrandDirectoryUrl, getBrandKeyFromSelection } from './brand-urls.js';
 
 // Import brand codes
 import { readFileSync } from 'fs';
