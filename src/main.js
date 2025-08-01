@@ -156,52 +156,66 @@ const crawler = new PuppeteerCrawler({
     let pageErrors = [];
     let harData = null;
     
-    // 1. Capture HTTP status and early failures
+    // Track suggestions to avoid duplicates
+    const seenSuggestions = new Set();
+    function suggest(action, message = '') {
+      if (seenSuggestions.has(action)) return;
+      seenSuggestions.add(action);
+      log.info(`💡 [${requestId}] Suggested action: ${action} ${message}`);
+    }
+    
+    // 1. Capture HTTP status and early failures (main document only)
     page.on('response', (response) => {
-      responseStatus = response.status();
-      responseHeaders = sanitizeData({ headers: response.headers() }).headers;
-      
-      const stage = timeline.mark('response_received');
-      log.info(`📡 [${requestId}] Response: ${response.status()} ${response.url()} (${stage.elapsed}ms)`);
-      
-      // Capture response body for classification with enhanced error handling
-      response.text().then(text => {
-        try {
-          responseBody = text;
-          const contentType = response.headers()['content-type'] || '';
-          const classification = classifyError({
-            statusCode: response.status(),
-            responseBody: text,
-            consoleErrors,
-            networkErrors,
-            pageErrors,
-            navigationTimeout,
-            errorMessage: null,
-            url: response.url(),
-            contentType,
-            requestId
-          });
-          
-          // Only log if shouldLog is true (debounced)
-          if (classification.shouldLog && classification.type !== ERROR_TYPES.UNKNOWN_TIMEOUT) {
-            log.warning(`🔍 [${requestId}] Error classification: ${classification.type} (${classification.confidence} confidence)${classification.isRootCause ? ' [ROOT CAUSE]' : ''}`);
-            if (classification.suggestedAction) {
-              log.info(`💡 [${requestId}] Suggested action: ${classification.suggestedAction}`);
-            }
-            if (classification.backoffHint) {
-              log.info(`⏰ [${requestId}] Backoff hint: ${classification.backoffHint.suggestedDelay}ms`);
-            }
-          }
-        } catch (classificationError) {
-          // Don't let classification errors crash the request
-          log.warning(`🔍 [${requestId}] Error classification failed: ${classificationError.message}`);
+      // Only classify main document responses, not subresources
+      if (response.request().resourceType() !== 'document') return;
+      if (response.frame() === page.mainFrame()) {
+        responseStatus = response.status();
+        responseHeaders = sanitizeData({ headers: response.headers() }).headers;
+        
+        const stage = timeline.mark('response_received');
+        if (input.enableDebugMode) {
+          log.info(`📡 [${requestId}] Main response: ${response.status()} ${response.url()} (${stage.elapsed}ms)`);
         }
-      }).catch((responseError) => {
-        log.warning(`📄 [${requestId}] Failed to capture response body for classification: ${responseError.message}`);
-      });
+        
+        // Capture response body for main document classification only
+        response.text().then(text => {
+          try {
+            responseBody = text;
+            const contentType = response.headers()['content-type'] || '';
+            const classification = classifyError({
+              statusCode: response.status(),
+              responseBody: text,
+              consoleErrors,
+              networkErrors,
+              pageErrors,
+              navigationTimeout,
+              errorMessage: null,
+              url: response.url(),
+              contentType,
+              requestId
+            });
+            
+            // Only log if shouldLog is true (debounced) and it's a significant issue
+            if (classification.shouldLog && classification.type !== ERROR_TYPES.UNKNOWN_TIMEOUT) {
+              log.warning(`🔍 [${requestId}] Error classification: ${classification.type} (${classification.confidence} confidence)${classification.isRootCause ? ' [ROOT CAUSE]' : ''}`);
+              if (classification.suggestedAction) {
+                suggest(classification.suggestedAction);
+              }
+              if (classification.backoffHint) {
+                log.info(`⏰ [${requestId}] Backoff hint: ${classification.backoffHint.suggestedDelay}ms`);
+              }
+            }
+          } catch (classificationError) {
+            // Don't let classification errors crash the request
+            log.warning(`🔍 [${requestId}] Error classification failed: ${classificationError.message}`);
+          }
+        }).catch((responseError) => {
+          log.warning(`📄 [${requestId}] Failed to capture response body for classification: ${responseError.message}`);
+        });
+      }
     });
     
-    // 2. Log network and page console events
+    // 2. Log network and page console events (filtered)
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         consoleErrors.push({
@@ -209,7 +223,10 @@ const crawler = new PuppeteerCrawler({
           text: msg.text(),
           url: msg.location()?.url || 'unknown'
         });
-        log.warning(`⚠️ [${requestId}] Console error: ${msg.text()}`);
+        // Only log console errors from main frame, and only in debug mode
+        if (msg.frame() === page.mainFrame() && input.enableDebugMode) {
+          log.warning(`⚠️ [${requestId}] Console error: ${msg.text()}`);
+        }
       }
     });
     
@@ -221,10 +238,16 @@ const crawler = new PuppeteerCrawler({
       log.error(`💥 [${requestId}] Page error: ${error.message}`);
     });
     
-    // 3. Capture network failures with better classification
+    // 3. Capture network failures (filtered for critical resources only)
     page.on('requestfailed', (request) => {
       const failure = request.failure()?.errorText || 'unknown';
       const url = request.url();
+      const resourceType = request.resourceType();
+      
+      // Skip non-critical resource types
+      if (['image', 'font', 'beacon', 'media'].includes(resourceType)) {
+        return; // Don't log or classify these as errors
+      }
       
       // Classify network failures to reduce noise
       const isThirdPartyAbort = failure === 'net::ERR_ABORTED' && 
@@ -234,13 +257,16 @@ const crawler = new PuppeteerCrawler({
         url: url,
         failure: failure,
         method: request.method(),
+        resourceType: resourceType,
         isThirdParty: isThirdPartyAbort
       });
       
-      // Only log non-third-party aborts as errors
+      // Only log non-third-party aborts as errors for critical resources, and only in debug mode
       if (!isThirdPartyAbort) {
-        log.error(`🌐 [${requestId}] Request failed: ${url} - ${failure}`);
-      } else {
+        if (input.enableDebugMode) {
+          log.error(`🌐 [${requestId}] Critical request failed: ${url} (${resourceType}) - ${failure}`);
+        }
+      } else if (input.enableDebugMode) {
         log.info(`🌐 [${requestId}] Third-party request aborted: ${url} (expected)`);
       }
     });
@@ -258,7 +284,9 @@ const crawler = new PuppeteerCrawler({
       await page.setUserAgent(stealthConfig.userAgent);
       
       const stage = timeline.mark('browser_configured');
-      log.info(`🌐 [${requestId}] Stealth config applied: ${stealthConfig.viewport.width}x${stealthConfig.viewport.height} (${stage.elapsed}ms)`);
+      if (input.enableDebugMode) {
+        log.info(`🌐 [${requestId}] Stealth config applied: ${stealthConfig.viewport.width}x${stealthConfig.viewport.height} (${stage.elapsed}ms)`);
+      }
       
       // 4. Enable network monitoring and HAR recording
       const client = await page.target().createCDPSession();
@@ -277,7 +305,9 @@ const crawler = new PuppeteerCrawler({
                 // Navigate to the target URL with enhanced error handling
     try {
       const navStage = timeline.mark('navigation_started');
-      log.info(`🧭 [${requestId}] Navigating to ${request.url} (${navStage.elapsed}ms)`);
+      if (input.enableDebugMode) {
+        log.info(`🧭 [${requestId}] Navigating to ${request.url} (${navStage.elapsed}ms)`);
+      }
 
       const response = await page.goto(request.url, {
         waitUntil: 'domcontentloaded',
@@ -302,19 +332,21 @@ const crawler = new PuppeteerCrawler({
       }
 
       // Add timing jitter for stealth
-      await page.waitForTimeout(stealthConfig.timingJitter);
+      await new Promise(r => setTimeout(r, stealthConfig.timingJitter));
 
       const successStage = timeline.mark('navigation_complete');
-      log.info(`✅ [${requestId}] Navigation successful (${successStage.elapsed}ms total)`);
+      if (input.enableDebugMode) {
+        log.info(`✅ [${requestId}] Navigation successful (${successStage.elapsed}ms total)`);
+      }
       
-      // Early challenge detection after successful navigation
+      // Early challenge detection after successful navigation (before full asset load)
       try {
         const challengeDetection = await detectChallengeEarly(page);
         if (challengeDetection.hasChallenge) {
           log.warning(`🚨 [${requestId}] Challenge page detected early: ${challengeDetection.type} (${challengeDetection.confidence} confidence)`);
-          log.info(`💡 [${requestId}] Suggested action: use_residential_proxy`);
+          suggest('use_residential_proxy', 'Challenge page detected - switch to residential proxy');
           
-          // Fail fast on challenge detection
+          // Fail fast on challenge detection to avoid wasting time on assets
           const challengeError = new Error('Challenge page detected - use residential proxy');
           challengeError.isChallengePage = true;
           throw challengeError;
@@ -432,8 +464,19 @@ const crawler = new PuppeteerCrawler({
       results.metadata.execution_time_ms = executionTime;
       results.metadata.errors = aggregateErrors(results.errors);
       
+      // Log summary only
+      const rootCauseErrors = results.errors.filter(e => e.classification?.isRootCause);
+      const noiseErrors = results.errors.filter(e => !e.classification?.isRootCause);
+      
       log.info(`✅ Scraped ${results.hotels.length} hotels in ${results.metadata.execution_time_ms}ms`);
-      log.info(`❌ Encountered ${results.errors.length} errors`);
+      
+      if (rootCauseErrors.length > 0) {
+        const primaryRootCause = rootCauseErrors[0];
+        const action = primaryRootCause.classification?.suggestedAction || 'none';
+        log.warning(`🎯 Root cause: ${primaryRootCause.classification?.type || 'unknown'} → ${action}`);
+      } else if (results.errors.length > 0) {
+        log.info(`❌ Encountered ${results.errors.length} errors (noise/symptoms)`);
+      }
       
          } catch (error) {
        const finalStage = timeline.mark('scraping_failed');
@@ -508,7 +551,7 @@ const crawler = new PuppeteerCrawler({
         const rootCauseIndicator = finalClassification.isRootCause ? ' [ROOT CAUSE]' : '';
         log.error(`🔍 [${requestId}] Final classification: ${finalClassification.type} (${finalClassification.confidence} confidence)${rootCauseIndicator}`);
         if (finalClassification.suggestedAction) {
-          log.info(`💡 [${requestId}] Suggested action: ${finalClassification.suggestedAction}`);
+          suggest(finalClassification.suggestedAction);
         }
         if (finalClassification.backoffHint) {
           log.info(`⏰ [${requestId}] Backoff hint: ${finalClassification.backoffHint.suggestedDelay}ms`);

@@ -259,19 +259,27 @@ export function classifyError({
     };
   }
 
-  // Only classify network errors for critical resources
+  // Only classify network errors for critical resources and only if they're significant
   if (signals.hasNetworkFailures && !signals.isNonCriticalResource) {
-    const suggestion = 'retry_with_delay';
-    const shouldLog = requestId ? shouldLogSuggestion(suggestion, requestId, 10000) : true;
+    // Only classify as network error if there are multiple failures or it's a critical resource
+    const criticalNetworkErrors = networkErrors.filter(error => 
+      !isNonCriticalResource(error.url || url) && 
+      !['image', 'font', 'beacon', 'media'].includes(error.resourceType || '')
+    );
     
-    return {
-      type: ERROR_TYPES.NETWORK_ERROR,
-      confidence: 'medium',
-      signals,
-      suggestedAction: suggestion,
-      shouldLog,
-      isRootCause: false
-    };
+    if (criticalNetworkErrors.length > 0) {
+      const suggestion = 'retry_with_delay';
+      const shouldLog = requestId ? shouldLogSuggestion(suggestion, requestId, 10000) : true;
+      
+      return {
+        type: ERROR_TYPES.NETWORK_ERROR,
+        confidence: 'medium',
+        signals,
+        suggestedAction: suggestion,
+        shouldLog,
+        isRootCause: false
+      };
+    }
   }
 
   if (signals.isTimeout && !signals.hasChallengePage) {
