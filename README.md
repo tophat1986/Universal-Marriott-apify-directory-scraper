@@ -47,12 +47,73 @@ The scraper supports all major Marriott brands including:
 - **Apartments by Marriott Bonvoy** (`apartments`)
 - **Marriott Conference Centers** (`conferencecenters`)
 
+## Brand Management
+
+### Adding/Updating Brands
+
+To add new brands or update existing brand URLs:
+
+1. **Edit `src/config/brand-urls.js`** - Add or modify brand entries:
+   ```javascript
+   export const BRAND_DIRECTORY_URLS = {
+     ritzcarlton: "https://www.ritzcarlton.com/en/hotels-and-resorts/",
+     stregis: "https://st-regis.marriott.com/hotel-directory/",
+     // Add new brands here...
+   };
+   ```
+
+2. **Update the input schema** - Run the sync script:
+   ```bash
+   npm run update-schema
+   ```
+
+This ensures the input schema dropdown stays in sync with your brand URLs. The script automatically:
+- Extracts all brands from `brand-urls.js`
+- Generates proper display names
+- Updates the input schema with current URLs
+- Maintains all other configuration options
+
+### Workflow
+
+```bash
+# 1. Edit brand URLs
+vim src/config/brand-urls.js
+
+# 2. Sync the input schema (automatic with pre-commit)
+npm run update-schema
+
+# 3. Test your changes
+npm run dev:ritzcarlton
+```
+
+### Automatic Sync (Recommended)
+
+For automatic synchronization, you can:
+
+1. **Use the pre-commit script** (recommended):
+   ```bash
+   npm run pre-commit
+   ```
+   This automatically detects if `brand-urls.js` was modified and syncs the schema.
+
+2. **Set up git hooks** (optional):
+   ```bash
+   # Add to .git/hooks/pre-commit (make it executable)
+   npm run pre-commit
+   ```
+
+3. **Manual sync** (when needed):
+   ```bash
+   npm run update-schema
+   ```
+
 ## Input Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `targetUrl` | string | ✅ | - | URL of the Marriott brand directory to scrape |
-| `brandKey` | string | ❌ | auto-detected | Pre-select brand strategy. If provided, validates targetUrl matches brand domain |
+| `brandSelection` | string | ✅ | - | Select brand from dropdown (auto-syncs with brand-urls.js) |
+| `proxyType` | string | ❌ | `datacenter` | Proxy type: `datacenter`, `residential`, `none` |
+| `targetUrl` | string | ❌ | auto-detected | Manual URL override (optional) |
 | `rateProfile` | string | ❌ | `normal` | Crawl aggressiveness: `slow`, `normal`, `fast` |
 | `maxPages` | integer | ❌ | 10 | Maximum number of pages to scrape |
 | `maxConcurrency` | integer | ❌ | 10 | Maximum concurrent requests |
@@ -60,6 +121,7 @@ The scraper supports all major Marriott brands including:
 | `navigationTimeoutSecs` | integer | ❌ | 60 | Navigation timeout in seconds |
 | `requestDelayMs` | integer | ❌ | 1000 | Delay between requests in milliseconds |
 | `respectRobotsTxt` | boolean | ❌ | true | Whether to respect robots.txt |
+| `enableDebugMode` | boolean | ❌ | false | Enable detailed logging and HAR recording |
 
 ### Rate Profiles
 

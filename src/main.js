@@ -9,6 +9,7 @@ import { getBrandDirectoryUrl, getBrandKeyFromSelection } from './config/brand-u
 import { createStrategy } from './strategies/factory.js';
 import { cleanAndValidateHotelData, removeDuplicateHotels, sortHotelsByMarsha } from './utils/data-cleaner.js';
 import { handleDeadHotel, handleExtractionError, aggregateErrors } from './utils/error-handler.js';
+import { classifyError, sanitizeData, createTimeline, generateStealthConfig, ERROR_TYPES } from './utils/error-classifier.js';
 
 // The init() call configures the Actor for its environment. It's recommended to start every Actor with an init().
 await Actor.init();
@@ -46,8 +47,34 @@ console.log(`🎯 Using brand: ${brandKey} for URL: ${targetUrl}`);
 // Get crawler configuration
 const crawlerConfig = getCrawlerConfig(input);
 
-// Create proxy configuration
-const proxyConfiguration = await Actor.createProxyConfiguration();
+// Create proxy configuration based on user selection
+let proxyConfiguration;
+try {
+    if (input.proxyType === 'residential') {
+        console.log('🌐 Using residential proxies for better anti-bot evasion');
+        proxyConfiguration = await Actor.createProxyConfiguration({
+            groups: ['RESIDENTIAL']
+        });
+    } else if (input.proxyType === 'datacenter') {
+        console.log('🌐 Using datacenter proxies (default)');
+        proxyConfiguration = await Actor.createProxyConfiguration({
+            groups: ['DATACENTER']
+        });
+    } else {
+        console.log('🌐 No proxies selected, proceeding without proxies');
+        proxyConfiguration = null;
+    }
+    
+    // Validate proxy configuration
+    if (proxyConfiguration && !proxyConfiguration.newUrlFunction) {
+        console.warn('⚠️ Proxy configuration created but no proxy groups available');
+        proxyConfiguration = null;
+    }
+} catch (error) {
+    console.warn('⚠️ Failed to create proxy configuration:', error.message);
+    console.log('🌐 Proceeding without proxies');
+    proxyConfiguration = null;
+}
 
 // Create dataset for results
 const dataset = await Actor.openDataset();
@@ -76,26 +103,203 @@ const strategy = await createStrategy(brandKey, {
 
 console.log(`📋 Using strategy: ${strategy.constructor.name}`);
 
-// Create a PuppeteerCrawler
-const crawler = new PuppeteerCrawler({
-  proxyConfiguration,
+// Create crawler options with enhanced timeout handling
+const crawlerOptions = {
   maxRequestsPerCrawl: 1, // We only need to visit one page
   maxConcurrency: crawlerConfig.maxConcurrency,
   maxRequestRetries: crawlerConfig.maxRequestRetries,
   navigationTimeoutSecs: crawlerConfig.navigationTimeoutSecs,
+  // Separate timeout for request handler processing
+  requestHandlerTimeoutSecs: crawlerConfig.navigationTimeoutSecs + 30, // Give extra time for processing
+};
+
+// Only add proxy configuration if it exists
+if (proxyConfiguration) {
+  crawlerOptions.proxyConfiguration = proxyConfiguration;
+}
+
+// Create a PuppeteerCrawler
+const crawler = new PuppeteerCrawler({
+  ...crawlerOptions,
   requestHandler: async ({ page, log, request }) => {
-    const startTime = Date.now();
-    log.info(`🚀 Starting scrape of ${request.url}`);
+    const timeline = createTimeline();
+    const proxyInfo = input.proxyType || 'default';
+    const requestId = Math.random().toString(36).substring(7);
+    const stealthConfig = generateStealthConfig();
+    
+    log.info(`🚀 [${requestId}] Starting scrape of ${request.url} with ${proxyInfo} proxy`);
+    
+    // Set up comprehensive error monitoring
+    let navigationTimeout = false;
+    let responseStatus = null;
+    let responseHeaders = null;
+    let responseBody = null;
+    let consoleErrors = [];
+    let networkErrors = [];
+    let pageErrors = [];
+    let harData = null;
+    
+    // 1. Capture HTTP status and early failures
+    page.on('response', (response) => {
+      responseStatus = response.status();
+      responseHeaders = sanitizeData({ headers: response.headers() }).headers;
+      
+      const stage = timeline.mark('response_received');
+      log.info(`📡 [${requestId}] Response: ${response.status()} ${response.url()} (${stage.elapsed}ms)`);
+      
+      // Capture response body for classification
+      response.text().then(text => {
+        responseBody = text;
+        const classification = classifyError({
+          statusCode: response.status(),
+          responseBody: text,
+          consoleErrors,
+          networkErrors,
+          pageErrors,
+          navigationTimeout,
+          errorMessage: null,
+          url: request.url
+        });
+        
+        if (classification.type !== ERROR_TYPES.UNKNOWN_TIMEOUT) {
+          log.warn(`🔍 [${requestId}] Error classification: ${classification.type} (${classification.confidence} confidence)`);
+          if (classification.suggestedAction) {
+            log.info(`💡 [${requestId}] Suggested action: ${classification.suggestedAction}`);
+          }
+          if (classification.backoffHint) {
+            log.info(`⏰ [${requestId}] Backoff hint: ${classification.backoffHint.suggestedDelay}ms`);
+          }
+        }
+      }).catch(() => {
+        log.warn(`📄 [${requestId}] Failed to capture response body for classification`);
+      });
+    });
+    
+    // 2. Log network and page console events
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        consoleErrors.push({
+          type: msg.type(),
+          text: msg.text(),
+          url: msg.location()?.url || 'unknown'
+        });
+        log.warn(`⚠️ [${requestId}] Console error: ${msg.text()}`);
+      }
+    });
+    
+    page.on('pageerror', (error) => {
+      pageErrors.push({
+        message: error.message,
+        stack: error.stack
+      });
+      log.error(`💥 [${requestId}] Page error: ${error.message}`);
+    });
+    
+    // 3. Capture network failures
+    page.on('requestfailed', (request) => {
+      networkErrors.push({
+        url: request.url(),
+        failure: request.failure()?.errorText || 'unknown',
+        method: request.method()
+      });
+      log.error(`🌐 [${requestId}] Request failed: ${request.url()} - ${request.failure()?.errorText}`);
+    });
     
     try {
-      // Set viewport for better rendering
-      await page.setViewport({ width: 1920, height: 1080 });
+      // Set stealth configuration
+      await page.setViewport(stealthConfig.viewport);
+      await page.setUserAgent(stealthConfig.userAgent);
       
-      // Navigate to the target URL
-      await page.goto(request.url, { 
-        waitUntil: 'networkidle0',
-        timeout: crawlerConfig.navigationTimeoutSecs * 1000
+      const stage = timeline.mark('browser_configured');
+      log.info(`🌐 [${requestId}] Stealth config applied: ${stealthConfig.viewport.width}x${stealthConfig.viewport.height} (${stage.elapsed}ms)`);
+      
+      // 4. Enable network monitoring and HAR recording
+      const client = await page.target().createCDPSession();
+      await client.send('Network.enable');
+      
+      // Enable HAR recording if debug mode is on
+      if (input.enableDebugMode) {
+        log.info(`🔍 [${requestId}] Debug mode enabled - recording HAR`);
+        try {
+          await client.send('Page.enable');
+        } catch (harError) {
+          log.warn(`📊 [${requestId}] HAR recording failed: ${harError.message}`);
+        }
+      }
+      
+                // Navigate to the target URL with enhanced error handling
+    try {
+      const navStage = timeline.mark('navigation_started');
+      log.info(`🧭 [${requestId}] Navigating to ${request.url} (${navStage.elapsed}ms)`);
+
+      const response = await page.goto(request.url, {
+        waitUntil: 'domcontentloaded',
+        timeout: crawlerConfig.navigationTimeoutSecs * 1000,
       });
+
+      // Fail-fast on terminal HTTP statuses from main document
+      if (response) {
+        const status = response.status();
+        responseStatus = status;
+        responseHeaders = sanitizeData({ headers: response.headers() }).headers;
+        log.info(`📡 [${requestId}] Main response status: ${status} ${request.url}`);
+        if ([403, 404, 429].includes(status)) {
+          log.warn(`🚫 [${requestId}] Terminal HTTP status ${status} received; aborting early.`);
+          if (status === 404) {
+            request.noRetry = true; // don't retry not-found
+          }
+          // Optional: attach backoff hint/mark rate limit
+          const msg = `HTTP ${status}`;
+          throw new Error(msg);
+        }
+      }
+
+      // Add timing jitter for stealth
+      await page.waitForTimeout(stealthConfig.timingJitter);
+
+      const successStage = timeline.mark('navigation_complete');
+      log.info(`✅ [${requestId}] Navigation successful (${successStage.elapsed}ms total)`);
+    } catch (navError) {
+        navigationTimeout = true;
+        const errorStage = timeline.mark('navigation_failed');
+        log.error(`⏰ [${requestId}] Navigation failed: ${navError.message} (${errorStage.elapsed}ms)`);
+        
+        // Capture partial HTML for debugging
+        try {
+          const html = await page.content();
+          const sanitizedHtml = sanitizeData({ html }).html;
+          log.debug(`📄 [${requestId}] Partial HTML: ${sanitizedHtml}`);
+          
+          // Classify the error with full context
+          const classification = classifyError({
+            statusCode: responseStatus,
+            responseBody: responseBody || html,
+            consoleErrors,
+            networkErrors,
+            pageErrors,
+            navigationTimeout: true,
+            errorMessage: navError.message,
+            url: request.url
+          });
+          
+          log.error(`🔍 [${requestId}] Final classification: ${classification.type} (${classification.confidence} confidence)`);
+          
+          // Export limited HAR if debug mode is enabled
+          if (input.enableDebugMode) {
+            try {
+              const har = await client.send('Network.getResponseBodyForInterception', {});
+              harData = sanitizeData({ har }).har;
+              log.info(`📊 [${requestId}] Limited HAR data captured (${JSON.stringify(harData).length} bytes)`);
+            } catch (harError) {
+              log.warn(`📊 [${requestId}] HAR capture failed: ${harError.message}`);
+            }
+          }
+        } catch (htmlError) {
+          log.error(`📄 [${requestId}] Failed to capture HTML: ${htmlError.message}`);
+        }
+        
+        throw navError;
+      }
       
       // Add delay between requests if specified
       if (crawlerConfig.requestDelayMs > 0) {
@@ -154,23 +358,111 @@ const crawler = new PuppeteerCrawler({
       log.info(`✅ Scraped ${results.hotels.length} hotels in ${results.metadata.execution_time_ms}ms`);
       log.info(`❌ Encountered ${results.errors.length} errors`);
       
-    } catch (error) {
-      log.error(`❌ Scraping failed: ${error.message}`);
-      
-      const errorObj = handleExtractionError(request.url, error);
-      results.errors.push(errorObj);
-      await dataset.pushData({ type: 'error', ...errorObj });
-    }
+         } catch (error) {
+       const finalStage = timeline.mark('scraping_failed');
+       log.error(`❌ [${requestId}] Scraping failed: ${error.message} (${finalStage.elapsed}ms total)`);
+       
+       // Final error classification
+       const finalClassification = classifyError({
+         statusCode: responseStatus,
+         responseBody,
+         consoleErrors,
+         networkErrors,
+         pageErrors,
+         navigationTimeout,
+         errorMessage: error.message,
+         url: request.url
+       });
+       
+       // Enhanced error object with classification and timeline
+       const enhancedError = {
+         ...handleExtractionError(request.url, error),
+         classification: finalClassification,
+         timeline: {
+           totalElapsed: timeline.getElapsed(),
+           stages: [
+             { stage: 'start', elapsed: 0 },
+             { stage: 'browser_configured', elapsed: timeline.mark('browser_configured').elapsed },
+             { stage: 'navigation_started', elapsed: timeline.mark('navigation_started').elapsed },
+             { stage: 'navigation_complete', elapsed: timeline.mark('navigation_complete').elapsed },
+             { stage: 'scraping_failed', elapsed: finalStage.elapsed }
+           ]
+         },
+         debug: {
+           requestId,
+           navigationTimeout,
+           responseStatus,
+           responseHeaders: responseHeaders ? Object.keys(responseHeaders) : null,
+           consoleErrors: consoleErrors.length,
+           networkErrors: networkErrors.length,
+           pageErrors: pageErrors.length,
+           proxyType: input.proxyType || 'default',
+           stealthConfig: {
+             viewport: stealthConfig.viewport,
+             userAgent: stealthConfig.userAgent.substring(0, 50) + '...'
+           },
+           harData: harData ? 'captured' : null,
+           timestamp: new Date().toISOString()
+         }
+       };
+       
+       results.errors.push(enhancedError);
+       await dataset.pushData({ type: 'error', ...enhancedError });
+       
+       // Log classification and suggested actions
+       log.error(`🔍 [${requestId}] Final classification: ${finalClassification.type} (${finalClassification.confidence} confidence)`);
+       if (finalClassification.suggestedAction) {
+         log.info(`💡 [${requestId}] Suggested action: ${finalClassification.suggestedAction}`);
+       }
+       if (finalClassification.backoffHint) {
+         log.info(`⏰ [${requestId}] Backoff hint: ${finalClassification.backoffHint.suggestedDelay}ms`);
+       }
+     }
   },
   failedRequestHandler: async ({ request, error, log }) => {
     log.error(`❌ Request failed: ${request.url} - ${error.message}`);
+
+    // Fast-fail logic: prevent retry on 404
+    if (error.message.includes('HTTP 404')) {
+      request.noRetry = true;
+    }
+
+    // Enhanced error object for failed requests
+    const enhancedError = {
+      ...handleExtractionError(request.url, error),
+      debug: {
+        requestId: Math.random().toString(36).substring(7),
+        errorType: 'request_failed',
+        proxyType: input.proxyType || 'default',
+        timestamp: new Date().toISOString(),
+        errorDetails: {
+          name: error.name,
+          message: error.message,
+          stack: error.stack?.split('\n').slice(0, 3).join('\n') // First 3 lines of stack
+        }
+      }
+    };
     
-    const errorObj = handleExtractionError(request.url, error);
-    results.errors.push(errorObj);
-    await dataset.pushData({ type: 'error', ...errorObj });
+    results.errors.push(enhancedError);
+    await dataset.pushData({ type: 'error', ...enhancedError });
   },
   launchContext: {
-    launchOptions: PUPPETEER_LAUNCH_OPTIONS,
+    launchOptions: {
+      ...PUPPETEER_LAUNCH_OPTIONS,
+      // Additional options for better stealth and stability
+      args: [
+        ...(PUPPETEER_LAUNCH_OPTIONS.args || []),
+        '--disable-web-security',
+        '--disable-features=VizDisplayCompositor',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu'
+      ]
+    },
   },
 });
 
@@ -189,6 +481,53 @@ console.log(`  Total hotels: ${results.metadata.total_hotels}`);
 console.log(`  Execution time: ${results.metadata.execution_time_ms}ms`);
 console.log(`  Errors: ${results.errors.length}`);
 console.log(`  Brand: ${brandKey}`);
+console.log(`  Proxy type: ${input.proxyType || 'default'}`);
+
+// Log error breakdown if there are errors
+if (results.errors.length > 0) {
+  console.log('\n🔍 Error Analysis:');
+  
+  // Group by classification type
+  const classifications = results.errors.reduce((acc, error) => {
+    const type = error.classification?.type || 'unknown';
+    acc[type] = (acc[type] || 0) + 1;
+    return acc;
+  }, {});
+  
+  Object.entries(classifications).forEach(([type, count]) => {
+    console.log(`  ${type}: ${count}`);
+  });
+  
+  // Show confidence levels
+  const confidenceLevels = results.errors.reduce((acc, error) => {
+    const confidence = error.classification?.confidence || 'unknown';
+    acc[confidence] = (acc[confidence] || 0) + 1;
+    return acc;
+  }, {});
+  
+  console.log('\n📊 Confidence Levels:');
+  Object.entries(confidenceLevels).forEach(([confidence, count]) => {
+    console.log(`  ${confidence}: ${count}`);
+  });
+  
+  // Show suggested actions
+  const suggestedActions = results.errors.reduce((acc, error) => {
+    const action = error.classification?.suggestedAction || 'none';
+    acc[action] = (acc[action] || 0) + 1;
+    return acc;
+  }, {});
+  
+  console.log('\n💡 Suggested Actions:');
+  Object.entries(suggestedActions).forEach(([action, count]) => {
+    console.log(`  ${action}: ${count}`);
+  });
+  
+  // Show proxy-related errors
+  const proxyErrors = results.errors.filter(e => e.debug?.proxyType);
+  if (proxyErrors.length > 0) {
+    console.log(`\n🌐 Proxy-related errors: ${proxyErrors.length}`);
+  }
+}
 
 // Gracefully exit the Actor process. It's recommended to quit all Actors with an exit().
 await Actor.exit();

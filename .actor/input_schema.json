@@ -6,79 +6,31 @@
         "brandSelection": {
             "title": "Brand Selection",
             "type": "string",
-            "description": "Select the Marriott brand directory to scrape. The system will automatically use the correct directory URL for the selected brand.",
+            "description": "Enter brand key (e.g., ritzcarlton, stregis, marriottMain). Available brands: ritzcarlton, stregis, marriottMain, sheraton, westin, w, luxurycollection, edition, autograph, tributeportfolio, design, bulgari, gaylord, renaissance, lemeridien, courtyard, springhill, fairfield, residenceinn, towneplace, achotels, aloft, moxy, protea, cityexpress, fourpoints, element, delta, sonder, apartments, conferencecenters",
+            "editor": "textfield",
+            "default": "ritzcarlton"
+        },
+        "proxyType": {
+            "title": "Proxy Type",
+            "type": "string",
+            "description": "Select proxy type. Datacenter proxies are faster and cheaper but may be detected by anti-bot systems. Residential proxies are more expensive but better at avoiding detection. Note: Requires corresponding proxy groups in your Apify account.",
             "editor": "select",
             "enum": [
-                "ritzcarlton",
-                "stregis", 
-                "marriottMain",
-                "sheraton",
-                "westin",
-                "w",
-                "luxurycollection",
-                "edition",
-                "autograph",
-                "tributeportfolio",
-                "design",
-                "bulgari",
-                "gaylord",
-                "renaissance",
-                "lemeridien",
-                "courtyard",
-                "springhill",
-                "fairfield",
-                "residenceinn",
-                "towneplace",
-                "achotels",
-                "aloft",
-                "moxy",
-                "protea",
-                "cityexpress",
-                "fourpoints",
-                "element",
-                "delta",
-                "sonder",
-                "apartments",
-                "conferencecenters"
+                "datacenter",
+                "residential",
+                "none"
             ],
             "enumTitles": [
-                "The Ritz-Carlton (https://www.ritzcarlton.com/en/hotels-and-resorts/)",
-                "The St. Regis (https://st-regis.marriott.com/hotels/)",
-                "Marriott Hotels (https://marriott-hotels.marriott.com/locations/)",
-                "Sheraton (https://www.sheraton.com/hotels/)",
-                "Westin (https://www.westin.com/hotels/)",
-                "W Hotels (https://www.whotels.com/hotels/)",
-                "The Luxury Collection (https://www.luxurycollection.com/hotels/)",
-                "EDITION (https://www.editionhotels.com/hotels/)",
-                "Autograph Collection (https://www.autographhotels.com/hotels/)",
-                "Tribute Portfolio (https://www.tributeportfolio.com/hotels/)",
-                "Design Hotels (https://www.designhotels.com/hotels/)",
-                "Bulgari Hotels & Resorts (https://www.bulgarihotels.com/hotels/)",
-                "Gaylord Hotels (https://www.gaylordhotels.com/hotels/)",
-                "Renaissance Hotels (https://www.renaissancehotels.com/hotels/)",
-                "Le Méridien (https://www.lemeridien.com/hotels/)",
-                "Courtyard by Marriott (https://www.courtyard.marriott.com/hotels/)",
-                "SpringHill Suites (https://www.springhillsuites.marriott.com/hotels/)",
-                "Fairfield Inn & Suites (https://www.fairfield.marriott.com/hotels/)",
-                "Residence Inn (https://www.residenceinn.marriott.com/hotels/)",
-                "TownePlace Suites (https://www.towneplacesuites.marriott.com/hotels/)",
-                "AC Hotels (https://www.achotels.marriott.com/hotels/)",
-                "Aloft Hotels (https://www.aloft.marriott.com/hotels/)",
-                "Moxy Hotels (https://www.moxyhotels.com/hotels/)",
-                "Protea Hotels (https://www.proteahotels.com/hotels/)",
-                "City Express (https://www.cityexpress.marriott.com/hotels/)",
-                "Four Points by Sheraton (https://www.fourpoints.com/hotels/)",
-                "Element Hotels (https://www.elementhotels.com/hotels/)",
-                "Delta Hotels (https://www.deltahotels.com/hotels/)",
-                "Sonder (https://www.sonder.com/hotels/)",
-                "Apartments by Marriott Bonvoy (https://www.apartments.marriott.com/hotels/)",
-                "Marriott Conference Centers (https://www.marriott.com/conference-centers/)"
-            ]
+                "Datacenter (Faster, cheaper, may be detected)",
+                "Residential (Better anti-bot evasion, more expensive)",
+                "None (No proxies, may be blocked)"
+            ],
+            "default": "datacenter"
         },
         "targetUrl": {
             "title": "Manual Target URL (Optional)",
             "type": "string",
-            "description": "If you want to use a specific URL instead of the default directory URL for the selected brand, enter it here. Otherwise, leave empty to use the selected brand's directory.",
+            "description": "If you want to use a specific URL instead of the default directory URL for the selected brand, enter it here. Otherwise, leave empty to use the selected brand directory.",
             "editor": "textfield"
         },
         "rateProfile": {
@@ -86,7 +38,11 @@
             "type": "string",
             "description": "Crawl aggressiveness profile: slow (2s delay, 1 concurrent), normal (1s delay, 10 concurrent), fast (0.5s delay, 20 concurrent)",
             "editor": "select",
-            "enum": ["slow", "normal", "fast"],
+            "enum": [
+                "slow",
+                "normal",
+                "fast"
+            ],
             "default": "normal"
         },
         "maxPages": {
@@ -124,7 +80,15 @@
             "type": "boolean",
             "description": "Whether to respect robots.txt",
             "default": true
+        },
+        "enableDebugMode": {
+            "title": "Enable Debug Mode",
+            "type": "boolean",
+            "description": "Enable detailed logging and HAR recording for debugging timeout and blocking issues",
+            "default": false
         }
     },
-    "required": ["brandSelection"]
+    "required": [
+        "brandSelection"
+    ]
 }
