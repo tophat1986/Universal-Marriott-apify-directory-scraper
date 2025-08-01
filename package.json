@@ -1,8 +1,8 @@
 {
-    "name": "crawlee-puppeteer-javascript",
-    "version": "0.0.1",
+    "name": "universal-marriott-directory-scraper",
+    "version": "2.0.0",
     "type": "module",
-    "description": "This is an example of an Apify Actor.",
+    "description": "Universal Marriott Directory Scraper - Strategy-based scraper for all Marriott brands",
     "dependencies": {
         "apify": "^3.4.2",
         "crawlee": "^3.13.8",
@@ -16,12 +16,16 @@
     },
     "scripts": {
         "start": "node src/main.js",
+        "dev:ritzcarlton": "node src/main.js --targetUrl=https://www.ritzcarlton.com/en/hotels/ --brandKey=ritzcarlton",
+        "dev:stregis": "node src/main.js --targetUrl=https://st-regis.marriott.com/hotels/ --brandKey=stregis",
+        "dev:marriottMain": "node src/main.js --targetUrl=https://marriott-hotels.marriott.com/locations/ --brandKey=marriottMain",
+        "dev:generic": "node src/main.js --targetUrl=https://www.sheraton.com/en/hotels/ --brandKey=generic",
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "lint": "eslint",
         "lint:fix": "eslint --fix",
-        "test": "echo \"Error: oops, the Actor has no tests yet, sad!\" && exit 1"
+        "test": "node src/utils/urlHelpers.test.js"
     },
-    "author": "It's not you it's me",
+    "author": "Development Team",
     "license": "ISC"
 }

@@ -1,0 +1,19 @@
+{
+  "name": "Generic Marriott Strategy",
+  "waitForSelector": "body",
+  "selectors": {
+    "hotelLinks": "a[href*='/hotels/']",
+    "hotelName": "h1, h2, h3, .hotel-name, .property-name",
+    "hotelUrl": "a[href*='/hotels/']",
+    "location": ".location, .address, .city",
+    "city": ".city, .location",
+    "country": ".country, .location",
+    "region": ".region, .location"
+  },
+  "brandInfo": {
+    "name": "Marriott Brand",
+    "code": "MC"
+  },
+  "expandSelectors": [],
+  "maxPages": 10
+} 

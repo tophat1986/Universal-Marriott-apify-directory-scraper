@@ -1,0 +1,26 @@
+{
+  "name": "Marriott Main Directory Strategy",
+  "waitForSelector": "#worldwide-locations",
+  "selectors": {
+    "hotelLinks": ".hotel-item a, .property-item a, a[href*='/hotels/']",
+    "hotelName": ".hotel-name, .property-name, h3, h4",
+    "hotelUrl": "a[href*='/hotels/']",
+    "location": ".location, .address, .city",
+    "city": ".city, .location",
+    "country": ".country, .location",
+    "region": ".region, .location"
+  },
+  "brandInfo": {
+    "name": "Marriott Hotels",
+    "code": "MC"
+  },
+  "expandSelectors": [
+    "button[aria-expanded='false']",
+    ".accordion-button.collapsed",
+    "[data-bs-toggle='collapse']:not(.show)",
+    ".expandable-header:not(.expanded)",
+    "h2.clickable",
+    "h3.clickable"
+  ],
+  "maxPages": 10
+} 

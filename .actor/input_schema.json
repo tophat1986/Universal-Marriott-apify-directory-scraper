@@ -1,18 +1,73 @@
 {
-    "title": "Marriott Hotel Directory Scraper",
+    "title": "Universal Marriott Directory Scraper",
     "type": "object",
     "schemaVersion": 1,
     "properties": {
-        "startUrls": {
-            "title": "Start URLs",
-            "type": "array",
-            "description": "URLs to start with. Default is the Marriott hotel directory.",
-            "editor": "requestListSources",
-            "prefill": [
-                {
-                    "url": "https://marriott-hotels.marriott.com/locations/"
-                }
-            ]
+        "targetUrl": {
+            "title": "Target URL",
+            "type": "string",
+            "description": "URL of the Marriott brand directory to scrape",
+            "editor": "textfield",
+            "required": true
+        },
+        "brandKey": {
+            "title": "Brand Key",
+            "type": "string",
+            "description": "Optional: Pre-select brand strategy. If provided, validates targetUrl matches brand domain.",
+            "editor": "select",
+            "enum": ["ritzcarlton", "stregis", "marriottMain", "sheraton", "westin", "w", "luxurycollection", "edition", "autograph", "tributeportfolio", "design", "bulgari", "gaylord", "renaissance", "lemeridien", "courtyard", "springhill", "fairfield", "residenceinn", "towneplace", "achotels", "aloft", "moxy", "protea", "cityexpress", "fourpoints", "element", "delta", "sonder", "apartments", "conferencecenters"],
+            "required": false
+        },
+        "rateProfile": {
+            "title": "Rate Profile",
+            "type": "string",
+            "description": "Crawl aggressiveness profile: slow (2s delay, 1 concurrent), normal (1s delay, 10 concurrent), fast (0.5s delay, 20 concurrent)",
+            "editor": "select",
+            "enum": ["slow", "normal", "fast"],
+            "default": "normal",
+            "required": false
+        },
+        "maxPages": {
+            "title": "Max Pages",
+            "type": "integer",
+            "description": "Maximum number of pages to scrape",
+            "default": 10,
+            "required": false
+        },
+        "maxConcurrency": {
+            "title": "Max Concurrency",
+            "type": "integer",
+            "description": "Maximum concurrent requests (overridden by rateProfile if specified)",
+            "default": 10,
+            "required": false
+        },
+        "maxRequestRetries": {
+            "title": "Max Request Retries",
+            "type": "integer",
+            "description": "Maximum retry attempts for failed requests",
+            "default": 2,
+            "required": false
+        },
+        "navigationTimeoutSecs": {
+            "title": "Navigation Timeout (seconds)",
+            "type": "integer",
+            "description": "Navigation timeout in seconds",
+            "default": 60,
+            "required": false
+        },
+        "requestDelayMs": {
+            "title": "Request Delay (ms)",
+            "type": "integer",
+            "description": "Delay between requests in milliseconds (overridden by rateProfile if specified)",
+            "default": 1000,
+            "required": false
+        },
+        "respectRobotsTxt": {
+            "title": "Respect Robots.txt",
+            "type": "boolean",
+            "description": "Whether to respect robots.txt",
+            "default": true,
+            "required": false
         }
     }
 }

@@ -1,0 +1,19 @@
+{
+  "name": "St. Regis Strategy",
+  "waitForSelector": ".hotels-list, .properties-list, body",
+  "selectors": {
+    "hotelLinks": "a[href*='/hotels/'], .hotel-link, .property-link",
+    "hotelName": ".hotel-name, .property-name, h2, h3",
+    "hotelUrl": "a[href*='/hotels/']",
+    "location": ".location, .address, .city",
+    "city": ".city, .location",
+    "country": ".country, .location",
+    "region": ".region, .location"
+  },
+  "brandInfo": {
+    "name": "St Regis",
+    "code": "XR"
+  },
+  "expandSelectors": [],
+  "maxPages": 10
+} 

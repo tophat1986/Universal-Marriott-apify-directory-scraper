@@ -1,9 +1,9 @@
 {
     "actorSpecification": 1,
-    "name": "marriott-hotel-directory-scraper",
-    "title": "Marriott Hotel Directory Scraper",
-    "description": "Scrapes all Marriott hotels from their worldwide directory, extracting hotel names, URLs, locations, brands, and Marsha codes.",
-    "version": "1.0",
+    "name": "universal-marriott-directory-scraper",
+    "title": "Universal Marriott Directory Scraper",
+    "description": "Universal strategy-based scraper for all Marriott brand directories. Supports 30+ brands with a single codebase, extracting hotel names, URLs, locations, brands, and Marsha codes.",
+    "version": "2.0.0",
     "meta": {
         "templateId": "js-crawlee-puppeteer-chrome"
     },

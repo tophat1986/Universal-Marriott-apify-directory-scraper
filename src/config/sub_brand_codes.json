@@ -1,0 +1,26 @@
+[
+  {
+    "code": "LC",
+    "name": "Luxury Collection",
+    "brand_code": "LC",
+    "description": "Luxury Collection sub-brand"
+  },
+  {
+    "code": "JW",
+    "name": "JW Marriott",
+    "brand_code": "MC",
+    "description": "JW Marriott sub-brand of Marriott Hotels"
+  },
+  {
+    "code": "SR",
+    "name": "St. Regis",
+    "brand_code": "XR",
+    "description": "St. Regis sub-brand"
+  },
+  {
+    "code": "RC",
+    "name": "The Ritz-Carlton",
+    "brand_code": "RZ",
+    "description": "The Ritz-Carlton sub-brand"
+  }
+] 
