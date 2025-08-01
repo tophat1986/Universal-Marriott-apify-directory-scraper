@@ -9,7 +9,7 @@ import { getBrandDirectoryUrl, getBrandKeyFromSelection } from './config/brand-u
 import { createStrategy } from './strategies/factory.js';
 import { cleanAndValidateHotelData, removeDuplicateHotels, sortHotelsByMarsha } from './utils/data-cleaner.js';
 import { handleDeadHotel, handleExtractionError, aggregateErrors } from './utils/error-handler.js';
-import { classifyError, sanitizeData, createTimeline, generateStealthConfig, ERROR_TYPES } from './utils/error-classifier.js';
+import { classifyError, detectChallengeEarly, sanitizeData, createTimeline, generateStealthConfig, ERROR_TYPES } from './utils/error-classifier.js';
 
 // The init() call configures the Actor for its environment. It's recommended to start every Actor with an init().
 await Actor.init();
@@ -168,6 +168,7 @@ const crawler = new PuppeteerCrawler({
       response.text().then(text => {
         try {
           responseBody = text;
+          const contentType = response.headers()['content-type'] || '';
           const classification = classifyError({
             statusCode: response.status(),
             responseBody: text,
@@ -176,11 +177,14 @@ const crawler = new PuppeteerCrawler({
             pageErrors,
             navigationTimeout,
             errorMessage: null,
-            url: request.url
+            url: response.url(),
+            contentType,
+            requestId
           });
           
-          if (classification.type !== ERROR_TYPES.UNKNOWN_TIMEOUT) {
-            log.warning(`🔍 [${requestId}] Error classification: ${classification.type} (${classification.confidence} confidence)`);
+          // Only log if shouldLog is true (debounced)
+          if (classification.shouldLog && classification.type !== ERROR_TYPES.UNKNOWN_TIMEOUT) {
+            log.warning(`🔍 [${requestId}] Error classification: ${classification.type} (${classification.confidence} confidence)${classification.isRootCause ? ' [ROOT CAUSE]' : ''}`);
             if (classification.suggestedAction) {
               log.info(`💡 [${requestId}] Suggested action: ${classification.suggestedAction}`);
             }
@@ -302,6 +306,26 @@ const crawler = new PuppeteerCrawler({
 
       const successStage = timeline.mark('navigation_complete');
       log.info(`✅ [${requestId}] Navigation successful (${successStage.elapsed}ms total)`);
+      
+      // Early challenge detection after successful navigation
+      try {
+        const challengeDetection = await detectChallengeEarly(page);
+        if (challengeDetection.hasChallenge) {
+          log.warning(`🚨 [${requestId}] Challenge page detected early: ${challengeDetection.type} (${challengeDetection.confidence} confidence)`);
+          log.info(`💡 [${requestId}] Suggested action: use_residential_proxy`);
+          
+          // Fail fast on challenge detection
+          const challengeError = new Error('Challenge page detected - use residential proxy');
+          challengeError.isChallengePage = true;
+          throw challengeError;
+        }
+      } catch (challengeError) {
+        if (challengeError.isChallengePage) {
+          throw challengeError;
+        }
+        // If challenge detection fails, continue normally
+        log.info(`🔍 [${requestId}] Challenge detection failed: ${challengeError.message}`);
+      }
     } catch (navError) {
         navigationTimeout = true;
         const errorStage = timeline.mark('navigation_failed');
@@ -327,14 +351,23 @@ const crawler = new PuppeteerCrawler({
           
           log.error(`🔍 [${requestId}] Final classification: ${classification.type} (${classification.confidence} confidence)`);
           
-          // Export limited HAR if debug mode is enabled
+          // Export limited HAR if debug mode is enabled (with better error handling)
           if (input.enableDebugMode) {
             try {
-              const har = await client.send('Network.getResponseBodyForInterception', {});
-              harData = sanitizeData({ har }).har;
-              log.info(`📊 [${requestId}] Limited HAR data captured (${JSON.stringify(harData).length} bytes)`);
+              // Check if CDP session is still active before attempting HAR capture
+              if (client && !client.closed) {
+                const har = await client.send('Network.getResponseBodyForInterception', {});
+                harData = sanitizeData({ har }).har;
+                log.info(`📊 [${requestId}] Limited HAR data captured (${JSON.stringify(harData).length} bytes)`);
+              } else {
+                log.warning(`📊 [${requestId}] CDP session closed, skipping HAR capture`);
+              }
             } catch (harError) {
-              log.warning(`📊 [${requestId}] HAR capture failed: ${harError.message}`);
+              if (harError.message.includes('Target closed')) {
+                log.info(`📊 [${requestId}] HAR capture skipped - target closed (normal during teardown)`);
+              } else {
+                log.warning(`📊 [${requestId}] HAR capture failed: ${harError.message}`);
+              }
             }
           }
         } catch (htmlError) {
@@ -393,9 +426,10 @@ const crawler = new PuppeteerCrawler({
       results.hotels = removeDuplicateHotels(results.hotels);
       results.hotels = sortHotelsByMarsha(results.hotels);
       
-      // Update metadata
+      // Update metadata with correct execution time
+      const executionTime = Date.now() - startTime;
       results.metadata.total_hotels = results.hotels.length;
-      results.metadata.execution_time_ms = Date.now() - startTime;
+      results.metadata.execution_time_ms = executionTime;
       results.metadata.errors = aggregateErrors(results.errors);
       
       log.info(`✅ Scraped ${results.hotels.length} hotels in ${results.metadata.execution_time_ms}ms`);
@@ -405,29 +439,33 @@ const crawler = new PuppeteerCrawler({
        const finalStage = timeline.mark('scraping_failed');
        log.error(`❌ [${requestId}] Scraping failed: ${error.message} (${finalStage.elapsed}ms total)`);
        
-       // Final error classification with graceful fallback
-       let finalClassification;
-       try {
-         finalClassification = classifyError({
-           statusCode: responseStatus,
-           responseBody,
-           consoleErrors,
-           networkErrors,
-           pageErrors,
-           navigationTimeout,
-           errorMessage: error.message,
-           url: request.url
-         });
-       } catch (classificationError) {
-         log.warning(`🔍 [${requestId}] Final classification failed: ${classificationError.message}`);
-         // Fallback classification
-         finalClassification = {
-           type: 'UNKNOWN_ERROR',
-           confidence: 'low',
-           suggestedAction: 'retry_with_delay',
-           backoffHint: { suggestedDelay: 5000 }
-         };
-       }
+               // Final error classification with graceful fallback
+        let finalClassification;
+        try {
+          finalClassification = classifyError({
+            statusCode: responseStatus,
+            responseBody,
+            consoleErrors,
+            networkErrors,
+            pageErrors,
+            navigationTimeout,
+            errorMessage: error.message,
+            url: request.url,
+            contentType: '',
+            requestId
+          });
+        } catch (classificationError) {
+          log.warning(`🔍 [${requestId}] Final classification failed: ${classificationError.message}`);
+          // Fallback classification
+          finalClassification = {
+            type: 'UNKNOWN_ERROR',
+            confidence: 'low',
+            suggestedAction: 'retry_with_delay',
+            backoffHint: { suggestedDelay: 5000 },
+            shouldLog: true,
+            isRootCause: false
+          };
+        }
        
        // Enhanced error object with classification and timeline
        const enhancedError = {
@@ -466,14 +504,15 @@ const crawler = new PuppeteerCrawler({
        results.errors.push(enhancedError);
        await dataset.pushData({ type: 'error', ...enhancedError });
        
-       // Log classification and suggested actions
-       log.error(`🔍 [${requestId}] Final classification: ${finalClassification.type} (${finalClassification.confidence} confidence)`);
-       if (finalClassification.suggestedAction) {
-         log.info(`💡 [${requestId}] Suggested action: ${finalClassification.suggestedAction}`);
-       }
-       if (finalClassification.backoffHint) {
-         log.info(`⏰ [${requestId}] Backoff hint: ${finalClassification.backoffHint.suggestedDelay}ms`);
-       }
+               // Log classification and suggested actions (with root cause indicator)
+        const rootCauseIndicator = finalClassification.isRootCause ? ' [ROOT CAUSE]' : '';
+        log.error(`🔍 [${requestId}] Final classification: ${finalClassification.type} (${finalClassification.confidence} confidence)${rootCauseIndicator}`);
+        if (finalClassification.suggestedAction) {
+          log.info(`💡 [${requestId}] Suggested action: ${finalClassification.suggestedAction}`);
+        }
+        if (finalClassification.backoffHint) {
+          log.info(`⏰ [${requestId}] Backoff hint: ${finalClassification.backoffHint.suggestedDelay}ms`);
+        }
      }
   },
   failedRequestHandler: async ({ request, error, log }) => {
@@ -545,15 +584,30 @@ console.log(`  Proxy type: ${proxyType} (${usingProxy ? 'active' : 'inactive'})`
 if (results.errors.length > 0) {
   console.log('\n🔍 Error Analysis:');
   
-  // Group by classification type
+  // Group by classification type and separate root causes from noise
   const classifications = results.errors.reduce((acc, error) => {
     const type = error.classification?.type || 'unknown';
-    acc[type] = (acc[type] || 0) + 1;
+    const isRootCause = error.classification?.isRootCause || false;
+    
+    if (!acc[type]) {
+      acc[type] = { total: 0, rootCause: 0, noise: 0 };
+    }
+    
+    acc[type].total += 1;
+    if (isRootCause) {
+      acc[type].rootCause += 1;
+    } else {
+      acc[type].noise += 1;
+    }
+    
     return acc;
   }, {});
   
-  Object.entries(classifications).forEach(([type, count]) => {
-    console.log(`  ${type}: ${count}`);
+  console.log('\n🔍 Error Analysis by Type:');
+  Object.entries(classifications).forEach(([type, counts]) => {
+    const rootCauseIndicator = counts.rootCause > 0 ? ` [${counts.rootCause} root cause]` : '';
+    const noiseIndicator = counts.noise > 0 ? ` [${counts.noise} noise]` : '';
+    console.log(`  ${type}: ${counts.total}${rootCauseIndicator}${noiseIndicator}`);
   });
   
   // Show confidence levels
@@ -584,6 +638,26 @@ if (results.errors.length > 0) {
   const proxyErrors = results.errors.filter(e => e.debug?.proxyType);
   if (proxyErrors.length > 0) {
     console.log(`\n🌐 Proxy-related errors: ${proxyErrors.length}`);
+  }
+  
+  // Show root cause vs noise summary
+  const rootCauseErrors = results.errors.filter(e => e.classification?.isRootCause);
+  const noiseErrors = results.errors.filter(e => !e.classification?.isRootCause);
+  
+  console.log('\n🎯 Root Cause Analysis:');
+  if (rootCauseErrors.length > 0) {
+    console.log(`  Root causes: ${rootCauseErrors.length}`);
+    rootCauseErrors.forEach(error => {
+      const type = error.classification?.type || 'unknown';
+      const action = error.classification?.suggestedAction || 'none';
+      console.log(`    - ${type}: ${action}`);
+    });
+  } else {
+    console.log('  No root causes identified');
+  }
+  
+  if (noiseErrors.length > 0) {
+    console.log(`  Noise/symptoms: ${noiseErrors.length} (filtered out)`);
   }
   
   // Show diagnostics health summary

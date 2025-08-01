@@ -28,8 +28,128 @@ export const BLOCKING_STATUS_CODES = {
   451: 'unavailable_for_legal_reasons'
 };
 
+// Non-critical resource types that shouldn't trigger network_error classification
+export const NON_CRITICAL_RESOURCES = {
+  IMAGES: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico'],
+  FONTS: ['.woff', '.woff2', '.ttf', '.eot'],
+  ANALYTICS: ['analytics', 'tagmanager', 'gtm', 'googletagmanager'],
+  TRACKING: ['tracking', 'pixel', 'beacon'],
+  CONSENT: ['consent', 'privacy', 'gdpr'],
+  ADS: ['ads', 'advertising', 'doubleclick'],
+  SOCIAL: ['facebook', 'twitter', 'linkedin', 'instagram'],
+  CDN: ['cdn', 'static', 'assets']
+};
+
+// Debounce tracking for repeated suggestions
+const suggestionDebounce = new Map();
+
 /**
- * Classify error based on multiple signals
+ * Check if a URL represents a non-critical resource
+ */
+function isNonCriticalResource(url, contentType = '') {
+  const urlLower = url.toLowerCase();
+  const contentTypeLower = contentType.toLowerCase();
+  
+  // Check file extensions
+  for (const [category, patterns] of Object.entries(NON_CRITICAL_RESOURCES)) {
+    if (patterns.some(pattern => urlLower.includes(pattern))) {
+      return true;
+    }
+  }
+  
+  // Check content-type headers
+  if (contentTypeLower.includes('image/') || 
+      contentTypeLower.includes('font/') || 
+      contentTypeLower.includes('text/css')) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Debounce repeated suggestions to reduce log noise
+ */
+function shouldLogSuggestion(suggestion, requestId, cooldownMs = 5000) {
+  const key = `${requestId}:${suggestion}`;
+  const now = Date.now();
+  const lastLog = suggestionDebounce.get(key);
+  
+  if (!lastLog || (now - lastLog) > cooldownMs) {
+    suggestionDebounce.set(key, now);
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Lightweight challenge detection for early fail-fast
+ * Can be called after initial navigation to detect anti-bot challenges
+ */
+export async function detectChallengeEarly(page) {
+  try {
+    // Quick check for common challenge indicators in the current page
+    const challengeChecks = [
+      // Check page title
+      () => page.title().then(title => {
+        const titleLower = title.toLowerCase();
+        return titleLower.includes('checking your browser') || 
+               titleLower.includes('security check') ||
+               titleLower.includes('cloudflare');
+      }),
+      
+      // Check for challenge-related elements
+      () => page.evaluate(() => {
+        const bodyText = document.body?.textContent?.toLowerCase() || '';
+        const hasChallenge = bodyText.includes('checking your browser') ||
+                           bodyText.includes('cloudflare') ||
+                           bodyText.includes('security check') ||
+                           bodyText.includes('captcha') ||
+                           bodyText.includes('suspicious');
+        
+        // Check for challenge-related elements
+        const challengeElements = document.querySelectorAll(
+          '[id*="challenge"], [class*="challenge"], [id*="captcha"], [class*="captcha"]'
+        );
+        
+        return hasChallenge || challengeElements.length > 0;
+      }),
+      
+      // Check for redirects to challenge pages
+      () => page.url().then(url => {
+        const urlLower = url.toLowerCase();
+        return urlLower.includes('challenge') || 
+               urlLower.includes('captcha') ||
+               urlLower.includes('security');
+      })
+    ];
+    
+    // Run all checks in parallel
+    const results = await Promise.all(challengeChecks.map(check => check().catch(() => false)));
+    
+    // If any check returns true, we have a challenge
+    const hasChallenge = results.some(result => result === true);
+    
+    return {
+      hasChallenge,
+      confidence: hasChallenge ? 'high' : 'low',
+      type: hasChallenge ? 'early_detection' : 'none'
+    };
+    
+  } catch (error) {
+    // If detection fails, assume no challenge (conservative approach)
+    return {
+      hasChallenge: false,
+      confidence: 'low',
+      type: 'detection_failed',
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Classify error based on multiple signals with noise reduction
  */
 export function classifyError({
   statusCode,
@@ -39,7 +159,9 @@ export function classifyError({
   pageErrors,
   navigationTimeout,
   errorMessage,
-  url
+  url,
+  contentType = '',
+  requestId = null
 }) {
   const signals = {
     statusCode,
@@ -48,15 +170,19 @@ export function classifyError({
     hasNetworkFailures: false,
     hasConsoleErrors: false,
     hasPageErrors: false,
-    isTimeout: false
+    isTimeout: false,
+    isNonCriticalResource: false
   };
+
+  // Check if this is a non-critical resource
+  signals.isNonCriticalResource = isNonCriticalResource(url, contentType);
 
   // Check status codes
   if (statusCode && BLOCKING_STATUS_CODES[statusCode]) {
     signals.hasBlockingStatus = true;
   }
 
-  // Check for challenge pages
+  // Check for challenge pages (highest priority)
   if (responseBody) {
     const bodyLower = responseBody.toLowerCase();
     for (const [challengeType, indicators] of Object.entries(CHALLENGE_INDICATORS)) {
@@ -67,9 +193,13 @@ export function classifyError({
     }
   }
 
-  // Check network failures
+  // Check network failures (filtered for critical resources)
   if (networkErrors && networkErrors.length > 0) {
-    signals.hasNetworkFailures = true;
+    // Only count network failures for critical resources
+    const criticalNetworkErrors = networkErrors.filter(error => 
+      !isNonCriticalResource(error.url || url)
+    );
+    signals.hasNetworkFailures = criticalNetworkErrors.length > 0;
   }
 
   // Check console/page errors
@@ -85,59 +215,90 @@ export function classifyError({
     signals.isTimeout = true;
   }
 
-  // Classification logic
+  // Classification logic with priority ordering
   if (signals.hasChallengePage) {
+    const suggestion = 'use_residential_proxy';
+    const shouldLog = requestId ? shouldLogSuggestion(suggestion, requestId) : true;
+    
     return {
       type: ERROR_TYPES.CHALLENGE_PAGE,
       confidence: 'high',
       signals,
-      suggestedAction: 'use_residential_proxy'
+      suggestedAction: suggestion,
+      shouldLog,
+      isRootCause: true
     };
   }
 
   if (statusCode === 429) {
+    const suggestion = 'exponential_backoff';
+    const shouldLog = requestId ? shouldLogSuggestion(suggestion, requestId) : true;
+    
     return {
       type: ERROR_TYPES.RATE_LIMITED,
       confidence: 'high',
       signals,
-      suggestedAction: 'exponential_backoff',
-      backoffHint: calculateBackoffHint()
+      suggestedAction: suggestion,
+      backoffHint: calculateBackoffHint(),
+      shouldLog,
+      isRootCause: true
     };
   }
 
   if (statusCode === 403 || statusCode === 451) {
+    const suggestion = 'rotate_proxy';
+    const shouldLog = requestId ? shouldLogSuggestion(suggestion, requestId) : true;
+    
     return {
       type: ERROR_TYPES.BLOCKED,
       confidence: 'high',
       signals,
-      suggestedAction: 'rotate_proxy'
+      suggestedAction: suggestion,
+      shouldLog,
+      isRootCause: true
     };
   }
 
-  if (signals.hasNetworkFailures) {
+  // Only classify network errors for critical resources
+  if (signals.hasNetworkFailures && !signals.isNonCriticalResource) {
+    const suggestion = 'retry_with_delay';
+    const shouldLog = requestId ? shouldLogSuggestion(suggestion, requestId, 10000) : true;
+    
     return {
       type: ERROR_TYPES.NETWORK_ERROR,
       confidence: 'medium',
       signals,
-      suggestedAction: 'retry_with_delay'
+      suggestedAction: suggestion,
+      shouldLog,
+      isRootCause: false
     };
   }
 
   if (signals.isTimeout && !signals.hasChallengePage) {
+    const suggestion = 'increase_timeout';
+    const shouldLog = requestId ? shouldLogSuggestion(suggestion, requestId) : true;
+    
     return {
       type: ERROR_TYPES.SLOW_LOAD,
       confidence: 'medium',
       signals,
-      suggestedAction: 'increase_timeout'
+      suggestedAction: suggestion,
+      shouldLog,
+      isRootCause: false
     };
   }
 
   if (signals.isTimeout) {
+    const suggestion = 'enable_debug_mode';
+    const shouldLog = requestId ? shouldLogSuggestion(suggestion, requestId) : true;
+    
     return {
       type: ERROR_TYPES.UNKNOWN_TIMEOUT,
       confidence: 'low',
       signals,
-      suggestedAction: 'enable_debug_mode'
+      suggestedAction: suggestion,
+      shouldLog,
+      isRootCause: false
     };
   }
 
@@ -145,7 +306,9 @@ export function classifyError({
     type: ERROR_TYPES.UNKNOWN_TIMEOUT,
     confidence: 'low',
     signals,
-    suggestedAction: 'enable_debug_mode'
+    suggestedAction: 'enable_debug_mode',
+    shouldLog: false,
+    isRootCause: false
   };
 }
 
