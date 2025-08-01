@@ -49,31 +49,44 @@ const crawlerConfig = getCrawlerConfig(input);
 
 // Create proxy configuration based on user selection
 let proxyConfiguration;
+let usingProxy = false; // Track actual proxy state
+let proxyType = 'none'; // Track actual proxy type
+
 try {
     if (input.proxyType === 'residential') {
         console.log('🌐 Using residential proxies for better anti-bot evasion');
         proxyConfiguration = await Actor.createProxyConfiguration({
             groups: ['RESIDENTIAL']
         });
+        proxyType = 'residential';
     } else if (input.proxyType === 'datacenter') {
         console.log('🌐 Using datacenter proxies (default)');
         proxyConfiguration = await Actor.createProxyConfiguration({
             groups: ['DATACENTER']
         });
+        proxyType = 'datacenter';
     } else {
         console.log('🌐 No proxies selected, proceeding without proxies');
         proxyConfiguration = null;
+        proxyType = 'none';
     }
     
     // Validate proxy configuration
     if (proxyConfiguration && !proxyConfiguration.newUrlFunction) {
-        console.warn('⚠️ Proxy configuration created but no proxy groups available');
+        console.warning('⚠️ Proxy configuration created but no proxy groups available');
         proxyConfiguration = null;
+        proxyType = 'none';
     }
+    
+    // Set the actual proxy state
+    usingProxy = proxyConfiguration !== null;
+    
 } catch (error) {
-    console.warn('⚠️ Failed to create proxy configuration:', error.message);
+    console.warning('⚠️ Failed to create proxy configuration:', error.message);
     console.log('🌐 Proceeding without proxies');
     proxyConfiguration = null;
+    proxyType = 'none';
+    usingProxy = false;
 }
 
 // Create dataset for results
@@ -118,16 +131,20 @@ if (proxyConfiguration) {
   crawlerOptions.proxyConfiguration = proxyConfiguration;
 }
 
+// Track execution start time
+const startTime = Date.now();
+
 // Create a PuppeteerCrawler
 const crawler = new PuppeteerCrawler({
   ...crawlerOptions,
   requestHandler: async ({ page, log, request }) => {
     const timeline = createTimeline();
-    const proxyInfo = input.proxyType || 'default';
     const requestId = Math.random().toString(36).substring(7);
     const stealthConfig = generateStealthConfig();
     
-    log.info(`🚀 [${requestId}] Starting scrape of ${request.url} with ${proxyInfo} proxy`);
+    // Use actual proxy state instead of input
+    const proxyInfo = usingProxy ? `${proxyType} proxy` : 'no proxy';
+    log.info(`🚀 [${requestId}] Starting scrape of ${request.url} with ${proxyInfo}`);
     
     // Set up comprehensive error monitoring
     let navigationTimeout = false;
@@ -147,31 +164,36 @@ const crawler = new PuppeteerCrawler({
       const stage = timeline.mark('response_received');
       log.info(`📡 [${requestId}] Response: ${response.status()} ${response.url()} (${stage.elapsed}ms)`);
       
-      // Capture response body for classification
+      // Capture response body for classification with enhanced error handling
       response.text().then(text => {
-        responseBody = text;
-        const classification = classifyError({
-          statusCode: response.status(),
-          responseBody: text,
-          consoleErrors,
-          networkErrors,
-          pageErrors,
-          navigationTimeout,
-          errorMessage: null,
-          url: request.url
-        });
-        
-        if (classification.type !== ERROR_TYPES.UNKNOWN_TIMEOUT) {
-          log.warn(`🔍 [${requestId}] Error classification: ${classification.type} (${classification.confidence} confidence)`);
-          if (classification.suggestedAction) {
-            log.info(`💡 [${requestId}] Suggested action: ${classification.suggestedAction}`);
+        try {
+          responseBody = text;
+          const classification = classifyError({
+            statusCode: response.status(),
+            responseBody: text,
+            consoleErrors,
+            networkErrors,
+            pageErrors,
+            navigationTimeout,
+            errorMessage: null,
+            url: request.url
+          });
+          
+          if (classification.type !== ERROR_TYPES.UNKNOWN_TIMEOUT) {
+            log.warning(`🔍 [${requestId}] Error classification: ${classification.type} (${classification.confidence} confidence)`);
+            if (classification.suggestedAction) {
+              log.info(`💡 [${requestId}] Suggested action: ${classification.suggestedAction}`);
+            }
+            if (classification.backoffHint) {
+              log.info(`⏰ [${requestId}] Backoff hint: ${classification.backoffHint.suggestedDelay}ms`);
+            }
           }
-          if (classification.backoffHint) {
-            log.info(`⏰ [${requestId}] Backoff hint: ${classification.backoffHint.suggestedDelay}ms`);
-          }
+        } catch (classificationError) {
+          // Don't let classification errors crash the request
+          log.warning(`🔍 [${requestId}] Error classification failed: ${classificationError.message}`);
         }
-      }).catch(() => {
-        log.warn(`📄 [${requestId}] Failed to capture response body for classification`);
+      }).catch((responseError) => {
+        log.warning(`📄 [${requestId}] Failed to capture response body for classification: ${responseError.message}`);
       });
     });
     
@@ -183,7 +205,7 @@ const crawler = new PuppeteerCrawler({
           text: msg.text(),
           url: msg.location()?.url || 'unknown'
         });
-        log.warn(`⚠️ [${requestId}] Console error: ${msg.text()}`);
+        log.warning(`⚠️ [${requestId}] Console error: ${msg.text()}`);
       }
     });
     
@@ -195,17 +217,38 @@ const crawler = new PuppeteerCrawler({
       log.error(`💥 [${requestId}] Page error: ${error.message}`);
     });
     
-    // 3. Capture network failures
+    // 3. Capture network failures with better classification
     page.on('requestfailed', (request) => {
+      const failure = request.failure()?.errorText || 'unknown';
+      const url = request.url();
+      
+      // Classify network failures to reduce noise
+      const isThirdPartyAbort = failure === 'net::ERR_ABORTED' && 
+        (url.includes('analytics') || url.includes('tagmanager') || url.includes('consent') || url.includes('privacy'));
+      
       networkErrors.push({
-        url: request.url(),
-        failure: request.failure()?.errorText || 'unknown',
-        method: request.method()
+        url: url,
+        failure: failure,
+        method: request.method(),
+        isThirdParty: isThirdPartyAbort
       });
-      log.error(`🌐 [${requestId}] Request failed: ${request.url()} - ${request.failure()?.errorText}`);
+      
+      // Only log non-third-party aborts as errors
+      if (!isThirdPartyAbort) {
+        log.error(`🌐 [${requestId}] Request failed: ${url} - ${failure}`);
+      } else {
+        log.info(`🌐 [${requestId}] Third-party request aborted: ${url} (expected)`);
+      }
     });
     
     try {
+      // Health check: verify logger methods exist
+      if (typeof log.warning !== 'function') {
+        log.error(`🚨 [${requestId}] Logger health check failed: log.warning not available`);
+        // Fallback to console.warning if needed
+        log.warning = console.warning || console.warn || (() => {});
+      }
+      
       // Set stealth configuration
       await page.setViewport(stealthConfig.viewport);
       await page.setUserAgent(stealthConfig.userAgent);
@@ -223,7 +266,7 @@ const crawler = new PuppeteerCrawler({
         try {
           await client.send('Page.enable');
         } catch (harError) {
-          log.warn(`📊 [${requestId}] HAR recording failed: ${harError.message}`);
+          log.warning(`📊 [${requestId}] HAR recording failed: ${harError.message}`);
         }
       }
       
@@ -244,7 +287,7 @@ const crawler = new PuppeteerCrawler({
         responseHeaders = sanitizeData({ headers: response.headers() }).headers;
         log.info(`📡 [${requestId}] Main response status: ${status} ${request.url}`);
         if ([403, 404, 429].includes(status)) {
-          log.warn(`🚫 [${requestId}] Terminal HTTP status ${status} received; aborting early.`);
+          log.warning(`🚫 [${requestId}] Terminal HTTP status ${status} received; aborting early.`);
           if (status === 404) {
             request.noRetry = true; // don't retry not-found
           }
@@ -291,7 +334,7 @@ const crawler = new PuppeteerCrawler({
               harData = sanitizeData({ har }).har;
               log.info(`📊 [${requestId}] Limited HAR data captured (${JSON.stringify(harData).length} bytes)`);
             } catch (harError) {
-              log.warn(`📊 [${requestId}] HAR capture failed: ${harError.message}`);
+              log.warning(`📊 [${requestId}] HAR capture failed: ${harError.message}`);
             }
           }
         } catch (htmlError) {
@@ -362,17 +405,29 @@ const crawler = new PuppeteerCrawler({
        const finalStage = timeline.mark('scraping_failed');
        log.error(`❌ [${requestId}] Scraping failed: ${error.message} (${finalStage.elapsed}ms total)`);
        
-       // Final error classification
-       const finalClassification = classifyError({
-         statusCode: responseStatus,
-         responseBody,
-         consoleErrors,
-         networkErrors,
-         pageErrors,
-         navigationTimeout,
-         errorMessage: error.message,
-         url: request.url
-       });
+       // Final error classification with graceful fallback
+       let finalClassification;
+       try {
+         finalClassification = classifyError({
+           statusCode: responseStatus,
+           responseBody,
+           consoleErrors,
+           networkErrors,
+           pageErrors,
+           navigationTimeout,
+           errorMessage: error.message,
+           url: request.url
+         });
+       } catch (classificationError) {
+         log.warning(`🔍 [${requestId}] Final classification failed: ${classificationError.message}`);
+         // Fallback classification
+         finalClassification = {
+           type: 'UNKNOWN_ERROR',
+           confidence: 'low',
+           suggestedAction: 'retry_with_delay',
+           backoffHint: { suggestedDelay: 5000 }
+         };
+       }
        
        // Enhanced error object with classification and timeline
        const enhancedError = {
@@ -396,12 +451,14 @@ const crawler = new PuppeteerCrawler({
            consoleErrors: consoleErrors.length,
            networkErrors: networkErrors.length,
            pageErrors: pageErrors.length,
-           proxyType: input.proxyType || 'default',
+           proxyType: proxyType,
+           usingProxy,
            stealthConfig: {
              viewport: stealthConfig.viewport,
              userAgent: stealthConfig.userAgent.substring(0, 50) + '...'
            },
            harData: harData ? 'captured' : null,
+           diagnosticsHealth: 'healthy',
            timestamp: new Date().toISOString()
          }
        };
@@ -433,7 +490,8 @@ const crawler = new PuppeteerCrawler({
       debug: {
         requestId: Math.random().toString(36).substring(7),
         errorType: 'request_failed',
-        proxyType: input.proxyType || 'default',
+        proxyType: proxyType,
+        usingProxy,
         timestamp: new Date().toISOString(),
         errorDetails: {
           name: error.name,
@@ -481,7 +539,7 @@ console.log(`  Total hotels: ${results.metadata.total_hotels}`);
 console.log(`  Execution time: ${results.metadata.execution_time_ms}ms`);
 console.log(`  Errors: ${results.errors.length}`);
 console.log(`  Brand: ${brandKey}`);
-console.log(`  Proxy type: ${input.proxyType || 'default'}`);
+console.log(`  Proxy type: ${proxyType} (${usingProxy ? 'active' : 'inactive'})`);
 
 // Log error breakdown if there are errors
 if (results.errors.length > 0) {
@@ -526,6 +584,20 @@ if (results.errors.length > 0) {
   const proxyErrors = results.errors.filter(e => e.debug?.proxyType);
   if (proxyErrors.length > 0) {
     console.log(`\n🌐 Proxy-related errors: ${proxyErrors.length}`);
+  }
+  
+  // Show diagnostics health summary
+  const diagnosticsErrors = results.errors.filter(e => 
+    e.debug?.errorType === 'classification_failed' || 
+    e.debug?.errorType === 'response_body_capture_failed'
+  );
+  
+  if (diagnosticsErrors.length > 0) {
+    console.log(`\n🔍 Diagnostics subsystem issues: ${diagnosticsErrors.length}`);
+    console.log('   - Some error classification or response capture failed');
+    console.log('   - This may affect error analysis quality');
+  } else {
+    console.log('\n✅ Diagnostics subsystem: healthy');
   }
 }
 
